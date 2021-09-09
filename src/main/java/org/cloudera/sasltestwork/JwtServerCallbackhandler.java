@@ -3,18 +3,22 @@ package org.cloudera.sasltestwork;
 import org.cloudera.sasltestwork.oauthbearer.OAuthBearerExtensionsValidatorCallback;
 import org.cloudera.sasltestwork.oauthbearer.OAuthBearerValidatorCallback;
 import org.cloudera.sasltestwork.oauthbearer.internals.OAuthBearerSaslServer;
+import org.cloudera.sasltestwork.oauthbearer.internals.knox.CertificateUtil;
 import org.cloudera.sasltestwork.oauthbearer.internals.knox.OAuthBearerConfigException;
 import org.cloudera.sasltestwork.oauthbearer.internals.knox.OAuthBearerIllegalTokenException;
 import org.cloudera.sasltestwork.oauthbearer.internals.knox.OAuthBearerScopeUtils;
-import org.cloudera.sasltestwork.oauthbearer.internals.knox.OAuthBearerSignedKnoxJwt;
+import org.cloudera.sasltestwork.oauthbearer.internals.knox.OAuthBearerSignedJwt;
 import org.cloudera.sasltestwork.oauthbearer.internals.knox.OAuthBearerValidationResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.security.cert.CertificateException;
+import java.security.interfaces.RSAPublicKey;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.logging.Logger;
 
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.CallbackHandler;
@@ -22,13 +26,14 @@ import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.auth.login.AppConfigurationEntry;
 
 public class JwtServerCallbackhandler implements CallbackHandler {
-  private static final Logger log = Logger.getLogger(Main.class.getName());
+  private static final Logger LOG = LoggerFactory.getLogger(JwtServerCallbackhandler.class);
 
-  private static final String OPTION_PREFIX = "unsecuredValidator";
+  private static final String OPTION_PREFIX = "signedJwtValidator";
   private static final String PRINCIPAL_CLAIM_NAME_OPTION = OPTION_PREFIX + "PrincipalClaimName";
   private static final String SCOPE_CLAIM_NAME_OPTION = OPTION_PREFIX + "ScopeClaimName";
   private static final String REQUIRED_SCOPE_OPTION = OPTION_PREFIX + "RequiredScope";
   private static final String ALLOWABLE_CLOCK_SKEW_MILLIS_OPTION = OPTION_PREFIX + "AllowableClockSkewMs";
+  private static final String PUBLIC_KEY_PEM = OPTION_PREFIX + "PublicKeyPem";
   private Map<String, String> moduleOptions = null;
   private boolean configured = false;
 
@@ -84,7 +89,8 @@ public class JwtServerCallbackhandler implements CallbackHandler {
     String scopeClaimName = scopeClaimName();
     List<String> requiredScope = requiredScope();
     int allowableClockSkewMs = allowableClockSkewMs();
-    OAuthBearerSignedKnoxJwt jwt = new OAuthBearerSignedKnoxJwt(tokenValue, principalClaimName, scopeClaimName);
+    RSAPublicKey rsaPublicKey = rsaPublicKey();
+    OAuthBearerSignedJwt jwt = new OAuthBearerSignedJwt(tokenValue, principalClaimName, scopeClaimName, rsaPublicKey);
     long now = System.currentTimeMillis();
 //    OAuthBearerValidationUtils
 //        .validateClaimForExistenceAndType(unsecuredJwt, true, principalClaimName, String.class)
@@ -95,8 +101,7 @@ public class JwtServerCallbackhandler implements CallbackHandler {
 //        .throwExceptionIfFailed();
 //    OAuthBearerValidationUtils.validateTimeConsistency(unsecuredJwt).throwExceptionIfFailed();
 //    OAuthBearerValidationUtils.validateScope(unsecuredJwt, requiredScope).throwExceptionIfFailed();
-//    log.log(Level.INFO,"Successfully validated token with principal {}: {}", jwt.principalName(),
-//        jwt.claims());
+    LOG.info("Successfully validated token with principal {}: {}", jwt.principalName(), jwt.claims());
     callback.token(jwt);
   }
 
@@ -108,6 +113,18 @@ public class JwtServerCallbackhandler implements CallbackHandler {
   private String scopeClaimName() {
     String scopeClaimNameValue = option(SCOPE_CLAIM_NAME_OPTION);
     return Utils.isBlank(scopeClaimNameValue) ? "scope" : scopeClaimNameValue.trim();
+  }
+
+  private RSAPublicKey rsaPublicKey() {
+    try {
+      String pemPublicKey = option(PUBLIC_KEY_PEM);
+      if (Utils.isBlank(pemPublicKey)) {
+        throw new OAuthBearerConfigException("RSA public key is not configured");
+      }
+      return CertificateUtil.parseRSAPublicKey(pemPublicKey);
+    } catch (CertificateException e) {
+      throw new OAuthBearerConfigException(e.getMessage(), e);
+    }
   }
 
   private List<String> requiredScope() {

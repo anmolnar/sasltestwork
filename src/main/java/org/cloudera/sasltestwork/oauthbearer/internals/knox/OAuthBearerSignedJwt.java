@@ -3,12 +3,21 @@ package org.cloudera.sasltestwork.oauthbearer.internals.knox;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeType;
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.JWSObject;
+import com.nimbusds.jose.JWSVerifier;
+import com.nimbusds.jose.crypto.RSASSAVerifier;
+import com.nimbusds.jwt.SignedJWT;
 import org.cloudera.sasltestwork.Utils;
 import org.cloudera.sasltestwork.oauthbearer.OAuthBearerToken;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.security.interfaces.RSAPublicKey;
+import java.text.ParseException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
@@ -19,10 +28,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-public class OAuthBearerSignedKnoxJwt implements OAuthBearerToken {
+/**
+ * Signed JWT implementation for OAuth Bearer authentication mech of SASL.
+ */
+public class OAuthBearerSignedJwt implements OAuthBearerToken {
+  private static final Logger LOG = LoggerFactory.getLogger(OAuthBearerSignedJwt.class);
+
   private final String compactSerialization;
-  private final List<String> splits;
-  private final Map<String, Object> header;
+  private final JWSHeader header;
   private final String principalClaimName;
   private final String scopeClaimName;
   private final Map<String, Object> claims;
@@ -30,42 +43,40 @@ public class OAuthBearerSignedKnoxJwt implements OAuthBearerToken {
   private final long lifetime;
   private final String principalName;
   private final Long startTimeMs;
+  private final RSAPublicKey publicKey;
 
   /**
    * Constructor with the given principal and scope claim names
    *
    * @param compactSerialization
-   *            the compact serialization to parse as an unsecured JWS
+   *            the compact serialization to parse as a signed JWT
    * @param principalClaimName
    *            the required principal claim name
    * @param scopeClaimName
    *            the required scope claim name
    * @throws OAuthBearerIllegalTokenException
-   *             if the compact serialization is not a valid unsecured JWS
+   *             if the compact serialization is not a valid JWT
    *             (meaning it did not have 3 dot-separated Base64URL sections
-   *             without an empty digital signature; or the header or claims
+   *             with a digital signature; or the header or claims
    *             either are not valid Base 64 URL encoded values or are not JSON
    *             after decoding; or the mandatory '{@code alg}' header value is
-   *             not "{@code none}")
+   *             missing)
    */
-  public OAuthBearerSignedKnoxJwt(String compactSerialization, String principalClaimName, String scopeClaimName)
+  public OAuthBearerSignedJwt(String compactSerialization, String principalClaimName, String scopeClaimName,
+                              RSAPublicKey publicKey)
       throws OAuthBearerIllegalTokenException {
-    this.compactSerialization = Objects.requireNonNull(compactSerialization);
-    if (compactSerialization.contains(".."))
+    this.publicKey = publicKey;
+    try {
+      this.compactSerialization = Objects.requireNonNull(compactSerialization);
+      SignedJWT jwtToken = SignedJWT.parse(compactSerialization);
+      validateToken(jwtToken);
+      this.header = jwtToken.getHeader();
+      this.claims = jwtToken.getJWTClaimsSet().getClaims();
+    } catch (ParseException e) {
       throw new OAuthBearerIllegalTokenException(
-          OAuthBearerValidationResult.newFailure("Malformed compact serialization contains '..'"));
-    this.splits = extractCompactSerializationSplits();
-    this.header = toMap(splits().get(0));
-    String claimsSplit = splits.get(1);
-    this.claims = toMap(claimsSplit);
-    String alg = Objects.requireNonNull(header().get("alg"), "JWS header must have an Algorithm value").toString();
-    if (!"none".equals(alg))
-      throw new OAuthBearerIllegalTokenException(
-          OAuthBearerValidationResult.newFailure("Unsecured JWS must have 'none' for an algorithm"));
-    String digitalSignatureSplit = splits.get(2);
-    if (!digitalSignatureSplit.isEmpty())
-      throw new OAuthBearerIllegalTokenException(
-          OAuthBearerValidationResult.newFailure("Unsecured JWS must not contain a digital signature"));
+          OAuthBearerValidationResult.newFailure("Unable to parse JWT token"));
+    }
+
     this.principalClaimName = Objects.requireNonNull(principalClaimName).trim();
     if (this.principalClaimName.isEmpty())
       throw new IllegalArgumentException("Must specify a non-blank principal claim name");
@@ -89,24 +100,6 @@ public class OAuthBearerSignedKnoxJwt implements OAuthBearerToken {
   @Override
   public String value() {
     return compactSerialization;
-  }
-
-  /**
-   * Return the 3 or 5 dot-separated sections of the JWT compact serialization
-   *
-   * @return the 3 or 5 dot-separated sections of the JWT compact serialization
-   */
-  public List<String> splits() {
-    return splits;
-  }
-
-  /**
-   * Return the JOSE Header as a {@code Map}
-   *
-   * @return the JOSE header
-   */
-  public Map<String, Object> header() {
-    return header;
   }
 
   @Override
@@ -288,16 +281,6 @@ public class OAuthBearerSignedKnoxJwt implements OAuthBearerToken {
     }
   }
 
-  private List<String> extractCompactSerializationSplits() {
-    List<String> tmpSplits = new ArrayList<>(Arrays.asList(compactSerialization.split("\\.")));
-    if (compactSerialization.endsWith("."))
-      tmpSplits.add("");
-    if (tmpSplits.size() != 3)
-      throw new OAuthBearerIllegalTokenException(OAuthBearerValidationResult.newFailure(
-          "Unsecured JWS compact serializations must have 3 dot-separated Base64URL-encoded values"));
-    return Collections.unmodifiableList(tmpSplits);
-  }
-
   private static Object convert(JsonNode value) {
     if (value.isArray()) {
       List<String> retvalList = new ArrayList<>();
@@ -342,4 +325,63 @@ public class OAuthBearerSignedKnoxJwt implements OAuthBearerToken {
     }
     return Collections.unmodifiableSet(retval);
   }
+
+  /**
+   * This method provides a single method for validating the JWT for use in
+   * request processing. It provides for the override of specific aspects of
+   * this implementation through submethods used within but also allows for the
+   * override of the entire token validation algorithm.
+   *
+   * @param jwtToken the token to validate
+   * @return true if valid
+   */
+  private void validateToken(SignedJWT jwtToken) {
+    boolean sigValid = validateSignature(jwtToken);
+    if (!sigValid) {
+      throw new OAuthBearerIllegalTokenException(
+          OAuthBearerValidationResult.newFailure("Invalid JWT: signature could not be verified"));
+    }
+//    boolean audValid = validateAudiences(jwtToken);
+//    if (!audValid) {
+//      throw new OAuthBearerIllegalTokenException(
+//          OAuthBearerValidationResult.newFailure("Invalid JWT: audience validation failed"));
+//    }
+//    boolean expValid = validateExpiration(jwtToken);
+//    if (!expValid) {
+//      throw new OAuthBearerIllegalTokenException(
+//          OAuthBearerValidationResult.newFailure("Invalid JWT: expiration validation failed"));
+//    }
+  }
+
+  /**
+   * Verify the signature of the JWT token in this method. This method depends
+   * on the public key that was established during init based upon the
+   * provisioned public key. Override this method in subclasses in order to
+   * customize the signature verification behavior.
+   *
+   * @param jwtToken the token that contains the signature to be validated
+   * @return valid true if signature verifies successfully; false otherwise
+   */
+  protected boolean validateSignature(SignedJWT jwtToken) {
+    boolean valid = false;
+    if (JWSObject.State.SIGNED == jwtToken.getState()) {
+      LOG.debug("JWT token is in a SIGNED state");
+      if (jwtToken.getSignature() != null) {
+        LOG.debug("JWT token signature is not null");
+        try {
+          JWSVerifier verifier = new RSASSAVerifier(publicKey);
+          if (jwtToken.verify(verifier)) {
+            valid = true;
+            LOG.debug("JWT token has been successfully verified");
+          } else {
+            LOG.warn("JWT signature verification failed.");
+          }
+        } catch (JOSEException je) {
+          LOG.warn("Error while validating signature", je);
+        }
+      }
+    }
+    return valid;
+  }
+
 }

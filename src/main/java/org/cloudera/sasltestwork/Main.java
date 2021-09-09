@@ -3,6 +3,8 @@ package org.cloudera.sasltestwork;
 import org.cloudera.sasltestwork.oauthbearer.internals.OAuthBearerClientInitialResponse;
 import org.cloudera.sasltestwork.oauthbearer.internals.OAuthBearerSaslClientProvider;
 import org.cloudera.sasltestwork.oauthbearer.internals.OAuthBearerSaslServerProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -10,8 +12,6 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.sasl.Sasl;
@@ -27,7 +27,7 @@ public class Main {
   private static final String AUTHORIZATION_ID = null;
   private static final String QOP_LEVEL = "auth-conf";
 
-  private static Logger log = Logger.getLogger(Main.class.getName());
+  private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
   static {
     OAuthBearerSaslServerProvider.initialize();
@@ -35,7 +35,7 @@ public class Main {
   }
 
   public static void main(String[] args) throws SaslException {
-    log.log(Level.INFO, "Testing SASL...");
+    LOG.info("Testing SASL...");
 
     JwtServerCallbackhandler serverHandler = new JwtServerCallbackhandler();
     List<AppConfigurationEntry> jaasConfigEntries = new ArrayList<>();
