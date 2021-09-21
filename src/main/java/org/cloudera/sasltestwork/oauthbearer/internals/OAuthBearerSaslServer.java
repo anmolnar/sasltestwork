@@ -1,19 +1,18 @@
 package org.cloudera.sasltestwork.oauthbearer.internals;
 
-import org.cloudera.sasltestwork.Main;
-import org.cloudera.sasltestwork.oauthbearer.OAuthBearerExtensionsValidatorCallback;
-import org.cloudera.sasltestwork.oauthbearer.OAuthBearerToken;
-import org.cloudera.sasltestwork.oauthbearer.OAuthBearerValidatorCallback;
 import org.cloudera.sasltestwork.SaslAuthenticationException;
 import org.cloudera.sasltestwork.SaslExtensions;
 import org.cloudera.sasltestwork.Utils;
+import org.cloudera.sasltestwork.oauthbearer.OAuthBearerExtensionsValidatorCallback;
+import org.cloudera.sasltestwork.oauthbearer.OAuthBearerToken;
+import org.cloudera.sasltestwork.oauthbearer.OAuthBearerValidatorCallback;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.CallbackHandler;
@@ -22,7 +21,8 @@ import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 
 public class OAuthBearerSaslServer implements SaslServer {
-  private static final Logger log = Logger.getLogger(Main.class.getName());
+  private static final Logger LOG = LoggerFactory.getLogger(OAuthBearerSaslServer.class);
+
   public static final String MECHANISM = "OAUTHBEARER";
   private static final String INTERNAL_ERROR_ON_SERVER = "Authentication could not be performed due to an internal error on the server";
 
@@ -44,7 +44,7 @@ public class OAuthBearerSaslServer implements SaslServer {
   @Override
   public byte[] evaluateResponse(byte[] response) throws SaslException {
     if (response.length == 1 && response[0] == OAuthBearerSaslClient.BYTE_CONTROL_A && errorMessage != null) {
-      log.log(Level.INFO, "Received %x01 response from client after it received our error");
+      LOG.info("Received %x01 response from client after it received our error");
       throw new SaslAuthenticationException(errorMessage);
     }
     errorMessage = null;
@@ -53,7 +53,7 @@ public class OAuthBearerSaslServer implements SaslServer {
     try {
       clientResponse = new OAuthBearerClientInitialResponse(response);
     } catch (SaslException e) {
-      log.log(Level.INFO, e.getMessage());
+      LOG.error("Unable to parse client initial response", e);
       throw e;
     }
 
@@ -109,7 +109,7 @@ public class OAuthBearerSaslServer implements SaslServer {
     if (token == null) {
       errorMessage = jsonErrorResponse(callback.errorStatus(), callback.errorScope(),
           callback.errorOpenIDConfiguration());
-      log.log(Level.INFO, errorMessage);
+      LOG.info(errorMessage);
       return errorMessage.getBytes(StandardCharsets.UTF_8);
     }
     /*
@@ -126,7 +126,7 @@ public class OAuthBearerSaslServer implements SaslServer {
     tokenForNegotiatedProperty = token;
     this.extensions = new SaslExtensions(validExtensions);
     complete = true;
-    log.log(Level.INFO, "Successfully authenticate User={}", token.principalName());
+    LOG.info("Successfully authenticate User={}", token.principalName());
     return new byte[0];
   }
 
@@ -143,7 +143,7 @@ public class OAuthBearerSaslServer implements SaslServer {
 
   private void handleCallbackError(Exception e) throws SaslException {
     String msg = String.format("%s: %s", INTERNAL_ERROR_ON_SERVER, e.getMessage());
-    log.log(Level.INFO, msg, e);
+    LOG.error(msg, e);
     throw new SaslException(msg);
   }
 
@@ -160,7 +160,7 @@ public class OAuthBearerSaslServer implements SaslServer {
       String errorMessage = String.format("Authentication failed: %d extensions are invalid! They are: %s",
           extensionsCallback.invalidExtensions().size(),
           Utils.mkString(extensionsCallback.invalidExtensions(), "", "", ": ", "; "));
-      log.log(Level.INFO, errorMessage);
+      LOG.error(errorMessage);
       throw new SaslAuthenticationException(errorMessage);
     }
 

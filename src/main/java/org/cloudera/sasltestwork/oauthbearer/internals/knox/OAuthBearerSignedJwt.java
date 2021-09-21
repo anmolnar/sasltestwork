@@ -1,5 +1,7 @@
 package org.cloudera.sasltestwork.oauthbearer.internals.knox;
 
+import com.auth0.jwk.JwkException;
+import com.auth0.jwk.JwkProvider;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeType;
@@ -7,7 +9,8 @@ import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSHeader;
 import com.nimbusds.jose.JWSObject;
 import com.nimbusds.jose.JWSVerifier;
-import com.nimbusds.jose.crypto.RSASSAVerifier;
+import com.nimbusds.jose.crypto.factories.DefaultJWSVerifierFactory;
+import com.nimbusds.jose.proc.JWSVerifierFactory;
 import com.nimbusds.jwt.SignedJWT;
 import org.cloudera.sasltestwork.Utils;
 import org.cloudera.sasltestwork.oauthbearer.OAuthBearerToken;
@@ -15,11 +18,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.security.interfaces.RSAPublicKey;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -43,7 +46,7 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
   private final long lifetime;
   private final String principalName;
   private final Long startTimeMs;
-  private final RSAPublicKey publicKey;
+  private final JwkProvider jwkProvider;
 
   /**
    * Constructor with the given principal and scope claim names
@@ -63,9 +66,9 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
    *             missing)
    */
   public OAuthBearerSignedJwt(String compactSerialization, String principalClaimName, String scopeClaimName,
-                              RSAPublicKey publicKey)
-      throws OAuthBearerIllegalTokenException {
-    this.publicKey = publicKey;
+                              JwkProvider jwkProvider)
+      throws OAuthBearerIllegalTokenException, JwkException {
+    this.jwkProvider = jwkProvider;
     try {
       this.compactSerialization = Objects.requireNonNull(compactSerialization);
       SignedJWT jwtToken = SignedJWT.parse(compactSerialization);
@@ -84,7 +87,7 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
     if (this.scopeClaimName.isEmpty())
       throw new IllegalArgumentException("Must specify a non-blank scope claim name");
     this.scope = calculateScope();
-    Number expirationTimeSeconds = expirationTime();
+    Date expirationTimeSeconds = expirationTime();
     if (expirationTimeSeconds == null)
       throw new OAuthBearerIllegalTokenException(
           OAuthBearerValidationResult.newFailure("No expiration time in JWT"));
@@ -216,8 +219,8 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
    * @throws OAuthBearerIllegalTokenException
    *             if the claim value is the incorrect type
    */
-  public Number expirationTime() throws OAuthBearerIllegalTokenException {
-    return claim("exp", Number.class);
+  public Date expirationTime() throws OAuthBearerIllegalTokenException {
+    return claim("exp", Date.class);
   }
 
   /**
@@ -292,12 +295,12 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
   }
 
   private Long calculateStartTimeMs() throws OAuthBearerIllegalTokenException {
-    Number issuedAtSeconds = claim("iat", Number.class);
+    Date issuedAtSeconds = claim("iat", Date.class);
     return issuedAtSeconds == null ? null : convertClaimTimeInSecondsToMs(issuedAtSeconds);
   }
 
-  private static long convertClaimTimeInSecondsToMs(Number claimValue) {
-    return Math.round(claimValue.doubleValue() * 1000);
+  private static long convertClaimTimeInSecondsToMs(Date claimValue) {
+    return Math.round(claimValue.getTime() * 1000);
   }
 
   private Set<String> calculateScope() {
@@ -335,7 +338,7 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
    * @param jwtToken the token to validate
    * @return true if valid
    */
-  private void validateToken(SignedJWT jwtToken) {
+  private void validateToken(SignedJWT jwtToken) throws JwkException {
     boolean sigValid = validateSignature(jwtToken);
     if (!sigValid) {
       throw new OAuthBearerIllegalTokenException(
@@ -362,14 +365,16 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
    * @param jwtToken the token that contains the signature to be validated
    * @return valid true if signature verifies successfully; false otherwise
    */
-  protected boolean validateSignature(SignedJWT jwtToken) {
+  protected boolean validateSignature(SignedJWT jwtToken) throws JwkException {
     boolean valid = false;
     if (JWSObject.State.SIGNED == jwtToken.getState()) {
       LOG.debug("JWT token is in a SIGNED state");
       if (jwtToken.getSignature() != null) {
         LOG.debug("JWT token signature is not null");
         try {
-          JWSVerifier verifier = new RSASSAVerifier(publicKey);
+          JWSVerifierFactory jwsVerifierFactory = new DefaultJWSVerifierFactory();
+          JWSVerifier verifier = jwsVerifierFactory.createJWSVerifier(jwtToken.getHeader(),
+              jwkProvider.get(jwtToken.getHeader().getKeyID()).getPublicKey());
           if (jwtToken.verify(verifier)) {
             valid = true;
             LOG.debug("JWT token has been successfully verified");

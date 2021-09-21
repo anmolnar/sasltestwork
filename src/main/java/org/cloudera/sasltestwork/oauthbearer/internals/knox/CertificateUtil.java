@@ -24,6 +24,7 @@ public class CertificateUtil {
     String fullPem = PEM_HEADER + pem + PEM_FOOTER;
     PublicKey key = null;
     CertificateFactory fact = CertificateFactory.getInstance("X.509");
+
     ByteArrayInputStream is = new ByteArrayInputStream(
         fullPem.getBytes(StandardCharsets.UTF_8));
 

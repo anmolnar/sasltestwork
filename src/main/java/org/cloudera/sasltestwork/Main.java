@@ -1,11 +1,16 @@
 package org.cloudera.sasltestwork;
 
+import com.auth0.jwk.JwkException;
+import com.auth0.jwk.JwkProvider;
+import com.auth0.jwk.JwkProviderBuilder;
 import org.cloudera.sasltestwork.oauthbearer.internals.OAuthBearerClientInitialResponse;
 import org.cloudera.sasltestwork.oauthbearer.internals.OAuthBearerSaslClientProvider;
 import org.cloudera.sasltestwork.oauthbearer.internals.OAuthBearerSaslServerProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Enumeration;
@@ -34,10 +39,14 @@ public class Main {
     OAuthBearerSaslClientProvider.initialize();
   }
 
-  public static void main(String[] args) throws SaslException {
+  public static void main(String[] args) throws SaslException, JwkException, MalformedURLException {
     LOG.info("Testing SASL...");
 
-    JwtServerCallbackhandler serverHandler = new JwtServerCallbackhandler();
+    JwkProvider jwkProvider =
+        new JwkProviderBuilder(new URL("file:////Users/andormolnar/work/jwt/jwks.json"))
+        .build();
+
+    JwtServerCallbackhandler serverHandler = new JwtServerCallbackhandler(jwkProvider);
     List<AppConfigurationEntry> jaasConfigEntries = new ArrayList<>();
     Map<String, String> options = new HashMap<>();
     AppConfigurationEntry appConfigurationEntry =
@@ -76,8 +85,8 @@ public class Main {
 
     OAuthBearerClientInitialResponse r =
         new OAuthBearerClientInitialResponse(
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
-            "user", null);
+            "<jwt>",
+            null, null);
     System.out.println(new String(r.toBytes(), StandardCharsets.UTF_8));
     challenge = saslServer.evaluateResponse(r.toBytes());
     response = saslClient.evaluateChallenge(challenge);
