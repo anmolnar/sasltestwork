@@ -11,7 +11,9 @@ import com.nimbusds.jose.proc.BadJOSEException;
 import com.nimbusds.jose.proc.JWSKeySelector;
 import com.nimbusds.jose.proc.JWSVerificationKeySelector;
 import com.nimbusds.jose.proc.SecurityContext;
+import com.nimbusds.jwt.JWT;
 import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.JWTParser;
 import com.nimbusds.jwt.proc.ConfigurableJWTProcessor;
 import com.nimbusds.jwt.proc.DefaultJWTProcessor;
 import org.cloudera.sasltestwork.Utils;
@@ -24,7 +26,6 @@ import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -72,30 +73,31 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
     this.jwkSet = jwkSet;
     try {
       this.compactSerialization = Objects.requireNonNull(compactSerialization);
+      this.principalClaimName = Objects.requireNonNull(principalClaimName).trim();
+      if (this.principalClaimName.isEmpty())
+        throw new IllegalArgumentException("Must specify a non-blank principal claim name");
+      this.scopeClaimName = Objects.requireNonNull(scopeClaimName).trim();
+      if (this.scopeClaimName.isEmpty())
+        throw new IllegalArgumentException("Must specify a non-blank scope claim name");
+
       this.claims = validateToken(compactSerialization);
+
+      this.scope = calculateScope();
+      Number expirationTimeSeconds = expirationTime();
+      if (expirationTimeSeconds == null)
+        throw new OAuthBearerIllegalTokenException(
+            OAuthBearerValidationResult.newFailure("No expiration time in JWT"));
+      lifetime = convertClaimTimeInSecondsToMs(expirationTimeSeconds);
+      String principalName = claim(this.principalClaimName, String.class);
+      if (Utils.isBlank(principalName))
+        throw new OAuthBearerIllegalTokenException(OAuthBearerValidationResult
+            .newFailure("No principal name in JWT claim: " + this.principalClaimName));
+      this.principalName = principalName;
+      this.startTimeMs = calculateStartTimeMs();
     } catch (ParseException | BadJOSEException | JOSEException e) {
       throw new OAuthBearerIllegalTokenException(
-          OAuthBearerValidationResult.newFailure(e.getMessage()));
+          OAuthBearerValidationResult.newFailure("Token validation failed"), e);
     }
-
-    this.principalClaimName = Objects.requireNonNull(principalClaimName).trim();
-    if (this.principalClaimName.isEmpty())
-      throw new IllegalArgumentException("Must specify a non-blank principal claim name");
-    this.scopeClaimName = Objects.requireNonNull(scopeClaimName).trim();
-    if (this.scopeClaimName.isEmpty())
-      throw new IllegalArgumentException("Must specify a non-blank scope claim name");
-    this.scope = calculateScope();
-    Date expirationTimeSeconds = expirationTime();
-    if (expirationTimeSeconds == null)
-      throw new OAuthBearerIllegalTokenException(
-          OAuthBearerValidationResult.newFailure("No expiration time in JWT"));
-    lifetime = convertClaimTimeInSecondsToMs(expirationTimeSeconds);
-    String principalName = claim(this.principalClaimName, String.class);
-    if (Utils.isBlank(principalName))
-      throw new OAuthBearerIllegalTokenException(OAuthBearerValidationResult
-          .newFailure("No principal name in JWT claim: " + this.principalClaimName));
-    this.principalName = principalName;
-    this.startTimeMs = calculateStartTimeMs();
   }
 
   @Override
@@ -217,8 +219,8 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
    * @throws OAuthBearerIllegalTokenException
    *             if the claim value is the incorrect type
    */
-  public Date expirationTime() throws OAuthBearerIllegalTokenException {
-    return claim("exp", Date.class);
+  public Number expirationTime() throws OAuthBearerIllegalTokenException {
+    return claim("exp", Number.class);
   }
 
   /**
@@ -293,12 +295,12 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
   }
 
   private Long calculateStartTimeMs() throws OAuthBearerIllegalTokenException {
-    Date issuedAtSeconds = claim("iat", Date.class);
+    Number issuedAtSeconds = claim("iat", Number.class);
     return issuedAtSeconds == null ? null : convertClaimTimeInSecondsToMs(issuedAtSeconds);
   }
 
-  private static long convertClaimTimeInSecondsToMs(Date claimValue) {
-    return Math.round(claimValue.getTime() * 1000);
+  private static long convertClaimTimeInSecondsToMs(Number claimValue) {
+    return Math.round(claimValue.doubleValue() * 1000);
   }
 
   private Set<String> calculateScope() {
@@ -337,9 +339,10 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
    * @return true if valid
    */
   private JWTClaimsSet validateToken(String jwtToken) throws BadJOSEException, JOSEException, ParseException {
+    JWT jwt = JWTParser.parse(jwtToken);
     ConfigurableJWTProcessor<SecurityContext> jwtProcessor = new DefaultJWTProcessor<>();
     JWSKeySelector<SecurityContext> keySelector =
-        new JWSVerificationKeySelector<>(JWSAlgorithm.RS256, new ImmutableJWKSet<>(jwkSet));
+        new JWSVerificationKeySelector<>((JWSAlgorithm)jwt.getHeader().getAlgorithm(), new ImmutableJWKSet<>(jwkSet));
     jwtProcessor.setJWSKeySelector(keySelector);
     return jwtProcessor.process(jwtToken, null);
   }

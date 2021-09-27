@@ -2,6 +2,7 @@ package org.cloudera.sasltestwork;
 
 import com.nimbusds.jose.jwk.JWKSet;
 import org.cloudera.sasltestwork.oauthbearer.OAuthBearerExtensionsValidatorCallback;
+import org.cloudera.sasltestwork.oauthbearer.OAuthBearerValidationUtils;
 import org.cloudera.sasltestwork.oauthbearer.OAuthBearerValidatorCallback;
 import org.cloudera.sasltestwork.oauthbearer.internals.OAuthBearerSaslServer;
 import org.cloudera.sasltestwork.oauthbearer.internals.knox.CertificateUtil;
@@ -98,15 +99,15 @@ public class JwtServerCallbackhandler implements CallbackHandler {
     int allowableClockSkewMs = allowableClockSkewMs();
     OAuthBearerSignedJwt jwt = new OAuthBearerSignedJwt(tokenValue, principalClaimName, scopeClaimName, jwkSet);
     long now = System.currentTimeMillis();
-//    OAuthBearerValidationUtils
-//        .validateClaimForExistenceAndType(unsecuredJwt, true, principalClaimName, String.class)
-//        .throwExceptionIfFailed();
-//    OAuthBearerValidationUtils.validateIssuedAt(unsecuredJwt, false, now, allowableClockSkewMs)
-//        .throwExceptionIfFailed();
-//    OAuthBearerValidationUtils.validateExpirationTime(unsecuredJwt, now, allowableClockSkewMs)
-//        .throwExceptionIfFailed();
-//    OAuthBearerValidationUtils.validateTimeConsistency(unsecuredJwt).throwExceptionIfFailed();
-//    OAuthBearerValidationUtils.validateScope(unsecuredJwt, requiredScope).throwExceptionIfFailed();
+    OAuthBearerValidationUtils
+        .validateClaimForExistenceAndType(jwt, true, principalClaimName, String.class)
+        .throwExceptionIfFailed();
+    OAuthBearerValidationUtils.validateIssuedAt(jwt, false, now, allowableClockSkewMs)
+        .throwExceptionIfFailed();
+    OAuthBearerValidationUtils.validateExpirationTime(jwt, now, allowableClockSkewMs)
+        .throwExceptionIfFailed();
+    OAuthBearerValidationUtils.validateTimeConsistency(jwt).throwExceptionIfFailed();
+    OAuthBearerValidationUtils.validateScope(jwt, requiredScope).throwExceptionIfFailed();
     LOG.info("Successfully validated token with principal {}: {}", jwt.principalName(), jwt.claims());
     callback.token(jwt);
   }
