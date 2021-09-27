@@ -1,7 +1,6 @@
 package org.cloudera.sasltestwork;
 
-import com.auth0.jwk.JwkException;
-import com.auth0.jwk.JwkProvider;
+import com.nimbusds.jose.jwk.JWKSet;
 import org.cloudera.sasltestwork.oauthbearer.OAuthBearerExtensionsValidatorCallback;
 import org.cloudera.sasltestwork.oauthbearer.OAuthBearerValidatorCallback;
 import org.cloudera.sasltestwork.oauthbearer.internals.OAuthBearerSaslServer;
@@ -36,7 +35,7 @@ public class JwtServerCallbackhandler implements CallbackHandler {
   private static final String REQUIRED_SCOPE_OPTION = OPTION_PREFIX + "RequiredScope";
   private static final String ALLOWABLE_CLOCK_SKEW_MILLIS_OPTION = OPTION_PREFIX + "AllowableClockSkewMs";
   private static final String PUBLIC_KEY_PEM = OPTION_PREFIX + "PublicKeyPem";
-  private final JwkProvider jwkProvider;
+  private final JWKSet jwkSet;
   private Map<String, String> moduleOptions = null;
   private boolean configured = false;
 
@@ -49,8 +48,8 @@ public class JwtServerCallbackhandler implements CallbackHandler {
     return configured;
   }
 
-  public JwtServerCallbackhandler(JwkProvider jwkProvider) {
-    this.jwkProvider = jwkProvider;
+  public JwtServerCallbackhandler(JWKSet jwkSet) {
+    this.jwkSet = jwkSet;
   }
 
   @SuppressWarnings("unchecked")
@@ -80,9 +79,6 @@ public class JwtServerCallbackhandler implements CallbackHandler {
           String failureScope = failureReason.failureScope();
           validationCallback.error(failureScope != null ? "insufficient_scope" : "invalid_token",
               failureScope, failureReason.failureOpenIdConfig());
-        } catch (JwkException e) {
-          validationCallback.error(e.getMessage(), "jwk", "jwk");
-          e.printStackTrace();
         }
       } else if (callback instanceof OAuthBearerExtensionsValidatorCallback) {
         OAuthBearerExtensionsValidatorCallback extensionsCallback = (OAuthBearerExtensionsValidatorCallback) callback;
@@ -92,7 +88,7 @@ public class JwtServerCallbackhandler implements CallbackHandler {
     }
   }
 
-  private void handleCallback(OAuthBearerValidatorCallback callback) throws JwkException {
+  private void handleCallback(OAuthBearerValidatorCallback callback) {
     String tokenValue = callback.tokenValue();
     if (tokenValue == null)
       throw new IllegalArgumentException("Callback missing required token value");
@@ -100,7 +96,7 @@ public class JwtServerCallbackhandler implements CallbackHandler {
     String scopeClaimName = scopeClaimName();
     List<String> requiredScope = requiredScope();
     int allowableClockSkewMs = allowableClockSkewMs();
-    OAuthBearerSignedJwt jwt = new OAuthBearerSignedJwt(tokenValue, principalClaimName, scopeClaimName, jwkProvider);
+    OAuthBearerSignedJwt jwt = new OAuthBearerSignedJwt(tokenValue, principalClaimName, scopeClaimName, jwkSet);
     long now = System.currentTimeMillis();
 //    OAuthBearerValidationUtils
 //        .validateClaimForExistenceAndType(unsecuredJwt, true, principalClaimName, String.class)

@@ -1,17 +1,19 @@
 package org.cloudera.sasltestwork.oauthbearer.internals.knox;
 
-import com.auth0.jwk.JwkException;
-import com.auth0.jwk.JwkProvider;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeType;
 import com.nimbusds.jose.JOSEException;
-import com.nimbusds.jose.JWSHeader;
-import com.nimbusds.jose.JWSObject;
-import com.nimbusds.jose.JWSVerifier;
-import com.nimbusds.jose.crypto.factories.DefaultJWSVerifierFactory;
-import com.nimbusds.jose.proc.JWSVerifierFactory;
-import com.nimbusds.jwt.SignedJWT;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
+import com.nimbusds.jose.proc.BadJOSEException;
+import com.nimbusds.jose.proc.JWSKeySelector;
+import com.nimbusds.jose.proc.JWSVerificationKeySelector;
+import com.nimbusds.jose.proc.SecurityContext;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.proc.ConfigurableJWTProcessor;
+import com.nimbusds.jwt.proc.DefaultJWTProcessor;
 import org.cloudera.sasltestwork.Utils;
 import org.cloudera.sasltestwork.oauthbearer.OAuthBearerToken;
 import org.slf4j.Logger;
@@ -38,15 +40,14 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
   private static final Logger LOG = LoggerFactory.getLogger(OAuthBearerSignedJwt.class);
 
   private final String compactSerialization;
-  private final JWSHeader header;
   private final String principalClaimName;
   private final String scopeClaimName;
-  private final Map<String, Object> claims;
+  private final JWTClaimsSet claims;
   private final Set<String> scope;
   private final long lifetime;
   private final String principalName;
   private final Long startTimeMs;
-  private final JwkProvider jwkProvider;
+  private final JWKSet jwkSet;
 
   /**
    * Constructor with the given principal and scope claim names
@@ -66,18 +67,15 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
    *             missing)
    */
   public OAuthBearerSignedJwt(String compactSerialization, String principalClaimName, String scopeClaimName,
-                              JwkProvider jwkProvider)
-      throws OAuthBearerIllegalTokenException, JwkException {
-    this.jwkProvider = jwkProvider;
+                              JWKSet jwkSet)
+      throws OAuthBearerIllegalTokenException {
+    this.jwkSet = jwkSet;
     try {
       this.compactSerialization = Objects.requireNonNull(compactSerialization);
-      SignedJWT jwtToken = SignedJWT.parse(compactSerialization);
-      validateToken(jwtToken);
-      this.header = jwtToken.getHeader();
-      this.claims = jwtToken.getJWTClaimsSet().getClaims();
-    } catch (ParseException e) {
+      this.claims = validateToken(compactSerialization);
+    } catch (ParseException | BadJOSEException | JOSEException e) {
       throw new OAuthBearerIllegalTokenException(
-          OAuthBearerValidationResult.newFailure("Unable to parse JWT token"));
+          OAuthBearerValidationResult.newFailure(e.getMessage()));
     }
 
     this.principalClaimName = Objects.requireNonNull(principalClaimName).trim();
@@ -131,7 +129,7 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
    * @return the (always non-null but possibly empty) claims
    */
   public Map<String, Object> claims() {
-    return claims;
+    return claims.toJSONObject();
   }
 
   /**
@@ -338,55 +336,12 @@ public class OAuthBearerSignedJwt implements OAuthBearerToken {
    * @param jwtToken the token to validate
    * @return true if valid
    */
-  private void validateToken(SignedJWT jwtToken) throws JwkException {
-    boolean sigValid = validateSignature(jwtToken);
-    if (!sigValid) {
-      throw new OAuthBearerIllegalTokenException(
-          OAuthBearerValidationResult.newFailure("Invalid JWT: signature could not be verified"));
-    }
-//    boolean audValid = validateAudiences(jwtToken);
-//    if (!audValid) {
-//      throw new OAuthBearerIllegalTokenException(
-//          OAuthBearerValidationResult.newFailure("Invalid JWT: audience validation failed"));
-//    }
-//    boolean expValid = validateExpiration(jwtToken);
-//    if (!expValid) {
-//      throw new OAuthBearerIllegalTokenException(
-//          OAuthBearerValidationResult.newFailure("Invalid JWT: expiration validation failed"));
-//    }
-  }
-
-  /**
-   * Verify the signature of the JWT token in this method. This method depends
-   * on the public key that was established during init based upon the
-   * provisioned public key. Override this method in subclasses in order to
-   * customize the signature verification behavior.
-   *
-   * @param jwtToken the token that contains the signature to be validated
-   * @return valid true if signature verifies successfully; false otherwise
-   */
-  protected boolean validateSignature(SignedJWT jwtToken) throws JwkException {
-    boolean valid = false;
-    if (JWSObject.State.SIGNED == jwtToken.getState()) {
-      LOG.debug("JWT token is in a SIGNED state");
-      if (jwtToken.getSignature() != null) {
-        LOG.debug("JWT token signature is not null");
-        try {
-          JWSVerifierFactory jwsVerifierFactory = new DefaultJWSVerifierFactory();
-          JWSVerifier verifier = jwsVerifierFactory.createJWSVerifier(jwtToken.getHeader(),
-              jwkProvider.get(jwtToken.getHeader().getKeyID()).getPublicKey());
-          if (jwtToken.verify(verifier)) {
-            valid = true;
-            LOG.debug("JWT token has been successfully verified");
-          } else {
-            LOG.warn("JWT signature verification failed.");
-          }
-        } catch (JOSEException je) {
-          LOG.warn("Error while validating signature", je);
-        }
-      }
-    }
-    return valid;
+  private JWTClaimsSet validateToken(String jwtToken) throws BadJOSEException, JOSEException, ParseException {
+    ConfigurableJWTProcessor<SecurityContext> jwtProcessor = new DefaultJWTProcessor<>();
+    JWSKeySelector<SecurityContext> keySelector =
+        new JWSVerificationKeySelector<>(JWSAlgorithm.RS256, new ImmutableJWKSet<>(jwkSet));
+    jwtProcessor.setJWSKeySelector(keySelector);
+    return jwtProcessor.process(jwtToken, null);
   }
 
 }
